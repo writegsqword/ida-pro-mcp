@@ -4,6 +4,8 @@ This file serves as the entry point for IDA Pro's plugin system.
 It loads the actual implementation from the ida_mcp package.
 """
 
+import errno
+import os
 import sys
 import idaapi
 import ida_kernwin
@@ -222,6 +224,7 @@ class MCP(idaapi.plugin_t):
 
     DEFAULT_HOST = "127.0.0.1"
     DEFAULT_PORT = 13337
+    SOCKET_PATH = os.path.join(os.getcwd(), "idamcp.sock")
 
     def init(self):
         hotkey = MCP.wanted_hotkey.replace("-", "+")
@@ -287,23 +290,17 @@ class MCP(idaapi.plugin_t):
         else:
             from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
 
-        port = self.port
-        max_port = port + 100
-        while port < max_port:
-            try:
-                MCP_SERVER.serve(
-                    self.host, port, request_handler=IdaMcpHttpRequestHandler
-                )
-                print(f"  Config: http://{self.host}:{port}/config.html")
-                self.mcp = MCP_SERVER
-                self._register_instance(port)
-                return
-            except OSError as e:
-                if e.errno in (48, 98, 10048):  # Address already in use
-                    port += 1
-                else:
-                    raise
-        print(f"[MCP] Error: No available port in range {self.port}-{max_port - 1}")
+        try:
+            MCP_SERVER.serve_unix(
+                self.SOCKET_PATH, request_handler=IdaMcpHttpRequestHandler
+            )
+            print(f"  Socket: {self.SOCKET_PATH}")
+            self.mcp = MCP_SERVER
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                print(f"[MCP] Error: Socket {self.SOCKET_PATH} is already in use")
+            else:
+                raise
 
     def _register_instance(self, port: int):
         try:
@@ -342,5 +339,4 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
-
 

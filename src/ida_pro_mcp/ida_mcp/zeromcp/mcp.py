@@ -1,3 +1,4 @@
+import os
 import re
 import select
 import socket
@@ -38,6 +39,42 @@ class McpRpcRegistry(JsonRpcRegistry):
                 "message": e.args[0] or "MCP Tool Error",
             }
         return super().map_exception(e)
+
+class _UnixHTTPServer(HTTPServer):
+    address_family = socket.AF_UNIX
+
+    def server_bind(self):
+        self.socket.bind(self.server_address)
+        self.server_address = self.socket.getsockname()
+        self.server_name = "localhost"
+        self.server_port = 0
+        self._socket_bound = True
+
+    def server_close(self):
+        super().server_close()
+        if getattr(self, "_socket_bound", False):
+            try:
+                os.unlink(self.server_address)
+            except FileNotFoundError:
+                pass
+
+class _ThreadingUnixHTTPServer(ThreadingHTTPServer):
+    address_family = socket.AF_UNIX
+
+    def server_bind(self):
+        self.socket.bind(self.server_address)
+        self.server_address = self.socket.getsockname()
+        self.server_name = "localhost"
+        self.server_port = 0
+        self._socket_bound = True
+
+    def server_close(self):
+        super().server_close()
+        if getattr(self, "_socket_bound", False):
+            try:
+                os.unlink(self.server_address)
+            except FileNotFoundError:
+                pass
 
 class _McpSseConnection:
     """Manages a single SSE client connection"""
@@ -646,6 +683,53 @@ class McpServer:
         logger.info("[MCP] Server started")
         logger.info("  Streamable HTTP: http://%s:%s/mcp", host, port)
         logger.info("  SSE: http://%s:%s/sse", host, port)
+
+        def serve_forever():
+            try:
+                self._http_server.serve_forever() # type: ignore
+            except Exception:
+                logger.exception("[MCP] Server error")
+            finally:
+                self._running = False
+
+        if background:
+            self._server_thread = threading.Thread(target=serve_forever, daemon=True)
+            self._server_thread.start()
+        else:
+            serve_forever()
+
+    def serve_unix(
+        self,
+        socket_path: str,
+        *,
+        background=True,
+        request_handler=McpHttpRequestHandler,
+    ):
+        if self._running:
+            logger.info("[MCP] Server is already running")
+            return
+
+        assert issubclass(request_handler, McpHttpRequestHandler)
+        self._http_server = (_ThreadingUnixHTTPServer if background else _UnixHTTPServer)(
+            socket_path,
+            request_handler,
+            bind_and_activate=False
+        )
+
+        setattr(self._http_server, "mcp_server", self)
+
+        try:
+            self._http_server.server_bind()
+            self._http_server.server_activate()
+        except OSError:
+            self._http_server.server_close()
+            self._http_server = None
+            raise
+
+        self._running = True
+
+        logger.info("[MCP] Server started")
+        logger.info("  Unix socket: %s", socket_path)
 
         def serve_forever():
             try:

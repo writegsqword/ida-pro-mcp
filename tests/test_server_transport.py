@@ -18,9 +18,8 @@ class _FakeResponse:
 class _BaseFakeConnection:
     instances = []
 
-    def __init__(self, host, port, timeout=30):
-        self.host = host
-        self.port = port
+    def __init__(self, socket_path, timeout=30):
+        self.socket_path = socket_path
         self.timeout = timeout
         self.request_calls = 0
         self.closed = False
@@ -60,12 +59,15 @@ class DispatchProxyTransportTests(unittest.TestCase):
         _ConnectFailureConnection.reset()
         self._old_host = server.IDA_HOST
         self._old_port = server.IDA_PORT
+        self._old_socket_path = server.IDA_SOCKET_PATH
         server.IDA_HOST = "127.0.0.1"
         server.IDA_PORT = 13337
+        server.IDA_SOCKET_PATH = "/tmp/idamcp-test.sock"
 
     def tearDown(self):
         server.IDA_HOST = self._old_host
         server.IDA_PORT = self._old_port
+        server.IDA_SOCKET_PATH = self._old_socket_path
 
     def test_proxy_request_forwards_external_base_header(self):
         original_getter = server.get_current_request_external_base_url
@@ -82,7 +84,7 @@ class DispatchProxyTransportTests(unittest.TestCase):
         _RecordingConnection.reset()
         server.get_current_request_external_base_url = lambda: "https://mcp.example.com/base"
         try:
-            with patch("ida_pro_mcp.server.http.client.HTTPConnection", _RecordingConnection):
+            with patch("ida_pro_mcp.server.UnixHTTPConnection", _RecordingConnection):
                 server._proxy_to_ida(b"{}")
         finally:
             server.get_current_request_external_base_url = original_getter
@@ -93,7 +95,7 @@ class DispatchProxyTransportTests(unittest.TestCase):
             "https://mcp.example.com/base",
         )
 
-    def test_proxy_to_ida_targets_module_default(self):
+    def test_proxy_to_ida_targets_module_socket(self):
         class _RecordingConnection(_BaseFakeConnection):
             def request(self, method, path, body, headers):
                 super().request(method, path, body, headers)
@@ -102,18 +104,17 @@ class DispatchProxyTransportTests(unittest.TestCase):
                 return _FakeResponse()
 
         _RecordingConnection.reset()
-        server.IDA_HOST = "10.0.0.50"
-        server.IDA_PORT = 24680
-        with patch("ida_pro_mcp.server.http.client.HTTPConnection", _RecordingConnection):
+        server.IDA_SOCKET_PATH = "/tmp/custom-idamcp.sock"
+        with patch("ida_pro_mcp.server.UnixHTTPConnection", _RecordingConnection):
             server._proxy_to_ida(b"{}")
         self.assertEqual(
-            (_RecordingConnection.instances[0].host, _RecordingConnection.instances[0].port),
-            ("10.0.0.50", 24680),
+            _RecordingConnection.instances[0].socket_path,
+            "/tmp/custom-idamcp.sock",
         )
 
     def test_dispatch_proxy_does_not_retry_post_send_failures(self):
         request = {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 1}
-        with patch("ida_pro_mcp.server.http.client.HTTPConnection", _ResponseFailureConnection):
+        with patch("ida_pro_mcp.server.UnixHTTPConnection", _ResponseFailureConnection):
             response = server.dispatch_proxy(request)
 
         self.assertIsNotNone(response)
@@ -126,7 +127,7 @@ class DispatchProxyTransportTests(unittest.TestCase):
 
     def test_dispatch_proxy_does_not_retry_http_503(self):
         request = {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 1}
-        with patch("ida_pro_mcp.server.http.client.HTTPConnection", _Http503Connection):
+        with patch("ida_pro_mcp.server.UnixHTTPConnection", _Http503Connection):
             response = server.dispatch_proxy(request)
 
         self.assertIsNotNone(response)
@@ -138,7 +139,7 @@ class DispatchProxyTransportTests(unittest.TestCase):
 
     def test_dispatch_proxy_does_not_retry_connection_failures(self):
         request = {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 1}
-        with patch("ida_pro_mcp.server.http.client.HTTPConnection", _ConnectFailureConnection):
+        with patch("ida_pro_mcp.server.UnixHTTPConnection", _ConnectFailureConnection):
             response = server.dispatch_proxy(request)
 
         self.assertIsNotNone(response)

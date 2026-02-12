@@ -34,16 +34,14 @@ class _FakeHttpResponse:
 class _RecordingConnection:
     calls = []
 
-    def __init__(self, host, port, timeout=None):
-        self.host = host
-        self.port = port
+    def __init__(self, socket_path, timeout=None):
+        self.socket_path = socket_path
         self.timeout = timeout
 
     def request(self, method, path, body=None, headers=None):
         self.__class__.calls.append(
             {
-                "host": self.host,
-                "port": self.port,
+                "socket_path": self.socket_path,
                 "timeout": self.timeout,
                 "method": method,
                 "path": path,
@@ -64,6 +62,7 @@ def _saved_target():
     """Preserve the currently configured IDA target across assertions."""
     old_host = server.IDA_HOST
     old_port = server.IDA_PORT
+    old_socket_path = server.IDA_SOCKET_PATH
     old_session = getattr(server.mcp._transport_session_id, "data", None)
     old_exts = getattr(server.mcp._enabled_extensions, "data", set())
     try:
@@ -71,6 +70,7 @@ def _saved_target():
     finally:
         server.IDA_HOST = old_host
         server.IDA_PORT = old_port
+        server.IDA_SOCKET_PATH = old_socket_path
         server.mcp._transport_session_id.data = old_session
         server.mcp._enabled_extensions.data = old_exts
 
@@ -111,9 +111,9 @@ def test_streamable_http_initialize_returns_session_id():
 def test_server_proxy_to_ida_forwards_session_and_extensions():
     """Proxy requests should preserve MCP session and enabled extensions."""
     with _saved_target():
-        original_conn = server.http.client.HTTPConnection
+        original_conn = server.UnixHTTPConnection
         _RecordingConnection.calls = []
-        server.http.client.HTTPConnection = _RecordingConnection
+        server.UnixHTTPConnection = _RecordingConnection
         server.IDA_HOST = "127.0.0.1"
         server.IDA_PORT = 13337
         server.mcp._transport_session_id.data = "http:session-456"
@@ -125,7 +125,7 @@ def test_server_proxy_to_ida_forwards_session_and_extensions():
             assert call["path"] == "/mcp?ext=dbg"
             assert call["headers"].get("Mcp-Session-Id") == "session-456"
         finally:
-            server.http.client.HTTPConnection = original_conn
+            server.UnixHTTPConnection = original_conn
 
 
 @test()
@@ -166,9 +166,9 @@ def test_resolve_ida_rpc_no_ext_leaves_extensions_empty():
 def test_ida_rpc_ext_flows_through_to_proxy_path():
     """Extensions from --ida-rpc should appear in proxied request path."""
     with _saved_target():
-        original_conn = server.http.client.HTTPConnection
+        original_conn = server.UnixHTTPConnection
         _RecordingConnection.calls = []
-        server.http.client.HTTPConnection = _RecordingConnection
+        server.UnixHTTPConnection = _RecordingConnection
         try:
             args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?ext=dbg")
             server._resolve_ida_rpc(args)
@@ -176,7 +176,7 @@ def test_ida_rpc_ext_flows_through_to_proxy_path():
             assert len(_RecordingConnection.calls) == 1
             assert _RecordingConnection.calls[0]["path"] == "/mcp?ext=dbg"
         finally:
-            server.http.client.HTTPConnection = original_conn
+            server.UnixHTTPConnection = original_conn
 
 
 # ---------------------------------------------------------------------------

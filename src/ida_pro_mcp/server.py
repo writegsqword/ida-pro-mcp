@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import sys
 import traceback
 from typing import TYPE_CHECKING
@@ -58,6 +59,7 @@ DEFAULT_IDA_HOST = "127.0.0.1"
 DEFAULT_IDA_PORT = 13337
 IDA_HOST = DEFAULT_IDA_HOST
 IDA_PORT = DEFAULT_IDA_PORT
+IDA_SOCKET_PATH = os.path.join(os.getcwd(), "idamcp.sock")
 
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
@@ -88,13 +90,13 @@ def _get_proxy_request_headers() -> dict[str, str]:
 
 
 def _proxy_to_ida(payload: bytes | str | dict) -> dict:
-    """Send a JSON-RPC request to the configured IDA instance and return the response."""
+    """Send a JSON-RPC request to IDA over the working-directory socket."""
     if isinstance(payload, dict):
         payload = json.dumps(payload)
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
 
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    conn = UnixHTTPConnection(IDA_SOCKET_PATH, timeout=30)
     try:
         conn.request(
             "POST",
@@ -115,13 +117,24 @@ def _proxy_to_ida(payload: bytes | str | dict) -> dict:
 
 def _proxy_output_download(path: str) -> tuple[int, str, list[tuple[str, str]], bytes]:
     """Proxy a raw output download from the configured IDA instance."""
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    conn = UnixHTTPConnection(IDA_SOCKET_PATH, timeout=30)
     try:
         conn.request("GET", path)
         response = conn.getresponse()
         return response.status, response.reason, response.getheaders(), response.read()
     finally:
         conn.close()
+
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: str, timeout: float | None = None):
+        super().__init__("localhost", timeout=timeout)
+        self._socket_path = socket_path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self._socket_path)
 
 
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
@@ -153,6 +166,7 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
                     "message": (
                         "Failed to complete request to IDA Pro. "
                         f"Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n"
+                        f"Socket: {IDA_SOCKET_PATH}\n"
                         "The request was not retried automatically. "
                         "If this was a mutating operation, verify IDA state before retrying.\n"
                         f"{full_info}"
