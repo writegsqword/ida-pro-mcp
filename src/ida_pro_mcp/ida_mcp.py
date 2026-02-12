@@ -4,6 +4,8 @@ This file serves as the entry point for IDA Pro's plugin system.
 It loads the actual implementation from the ida_mcp package.
 """
 
+import errno
+import os
 import sys
 import idaapi
 from typing import TYPE_CHECKING
@@ -30,9 +32,7 @@ class MCP(idaapi.plugin_t):
     wanted_name = "MCP"
     wanted_hotkey = "Ctrl-Alt-M"
 
-    # TODO: make these configurable
-    HOST = "127.0.0.1"
-    PORT = 13337
+    SOCKET_PATH = os.path.join(os.getcwd(), "idamcp.sock")
 
     def init(self):
         hotkey = MCP.wanted_hotkey.replace("-", "+")
@@ -63,14 +63,14 @@ class MCP(idaapi.plugin_t):
             print(f"[MCP] Cache init failed: {e}")
 
         try:
-            MCP_SERVER.serve(
-                self.HOST, self.PORT, request_handler=IdaMcpHttpRequestHandler
+            MCP_SERVER.serve_unix(
+                self.SOCKET_PATH, request_handler=IdaMcpHttpRequestHandler
             )
-            print(f"  Config: http://{self.HOST}:{self.PORT}/config.html")
+            print(f"  Socket: {self.SOCKET_PATH}")
             self.mcp = MCP_SERVER
         except OSError as e:
-            if e.errno in (48, 98, 10048):  # Address already in use
-                print(f"[MCP] Error: Port {self.PORT} is already in use")
+            if e.errno == errno.EADDRINUSE:
+                print(f"[MCP] Error: Socket {self.SOCKET_PATH} is already in use")
             else:
                 raise
 

@@ -4,6 +4,7 @@ import json
 import shutil
 import argparse
 import http.client
+import socket
 import tempfile
 import traceback
 import tomllib
@@ -24,9 +25,21 @@ else:
 
 IDA_HOST = "127.0.0.1"
 IDA_PORT = 13337
+IDA_SOCKET_PATH = os.path.join(os.getcwd(), "idamcp.sock")
 
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
+
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: str, timeout: float | None = None):
+        super().__init__("localhost", timeout=timeout)
+        self._socket_path = socket_path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self._socket_path)
 
 
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
@@ -41,7 +54,7 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     elif request_obj["method"].startswith("notifications/"):
         return dispatch_original(request)
 
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    conn = UnixHTTPConnection(IDA_SOCKET_PATH, timeout=30)
     try:
         if isinstance(request, dict):
             request = json.dumps(request)
@@ -66,7 +79,7 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32000,
-                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n{full_info}",
+                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\nSocket: {IDA_SOCKET_PATH}\n{full_info}",
                     "data": str(e),
                 },
                 "id": id,
